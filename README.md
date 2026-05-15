@@ -1,4 +1,26 @@
-# YouTube Transcript Downloader
+<div align="center">
+
+# 🎬 YouTube Transcript Downloader 📥
+
+### ⚡ Eksport transkrypcji YouTube do JSON jednym kliknięciem ⚡
+
+<p>
+  <img src="https://img.shields.io/badge/Tampermonkey-00485B?style=for-the-badge&logo=tampermonkey&logoColor=white" alt="Tampermonkey" />
+  <img src="https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black" alt="JavaScript" />
+  <img src="https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube" />
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="MIT License" />
+</p>
+
+<p>
+  <b>🚀 Zero zależności</b> &nbsp;•&nbsp;
+  <b>📦 Jeden plik</b> &nbsp;•&nbsp;
+  <b>⏱️ Pełne timestampy</b> &nbsp;•&nbsp;
+  <b>🔄 Obsługa SPA</b>
+</p>
+
+</div>
+
+---
 
 Lekki skrypt Tampermonkey, który dodaje pływający przycisk na stronach z filmami YouTube. Jedno kliknięcie eksportuje całą transkrypcję jako uporządkowany plik JSON.
 
