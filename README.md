@@ -24,12 +24,12 @@
 
 ---
 
-Lekki skrypt Tampermonkey, który dodaje dwa pływające przyciski na stronach z filmami YouTube:
+Lekki skrypt Tampermonkey, który dodaje dwa przyciski na stronach z filmami YouTube:
 
 - **⬇ Pobierz JSON** - eksportuje całą transkrypcję jako uporządkowany plik JSON
 - **✨ Streść (Mistral)** - generuje streszczenie filmu w punktach kluczowych i pokazuje je w okienku, korzystając z darmowego API Mistral AI
 
-Przydatny do budowania przeszukiwalnych archiwów, tworzenia notatek z timestampami, cytowania konkretnych fragmentów filmu lub błyskawicznego ogarnięcia o czym jest długi film bez oglądania go w całości.
+Przydatny do budowania przeszukiwalnych archiwów, tworzenia notatek z timestampami, cytowania konkretnych fragmentów filmu lub błyskawicznego ogarnięcia o czym jest długi film bez oglądania go w całości (szczególnie zagraniczne podcasty).
 
 ---
 
