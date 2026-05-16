@@ -7,6 +7,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_registerMenuCommand
 // @connect      api.mistral.ai
 // ==/UserScript==
 
@@ -394,6 +395,13 @@
         domObserver?.disconnect();
         domObserver = new MutationObserver(checkAndInject);
         domObserver.observe(document.body, { childList: true, subtree: true });
+    }
+
+    if (typeof GM_registerMenuCommand === 'function') {
+        GM_registerMenuCommand('Resetuj klucz API Mistral', () => {
+            GM_setValue(API_KEY_STORE, '');
+            alert('Klucz API Mistral został usunięty. Przy następnym streszczeniu skrypt poprosi o nowy.');
+        });
     }
 
     window.addEventListener('yt-navigate-finish', () => {
