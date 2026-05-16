@@ -1,8 +1,8 @@
 <div align="center">
 
-# 🎬 YouTube Transcript Downloader 📥
+# 🎬 YouTube Transcript Toolkit ✨
 
-### ⚡ Eksport transkrypcji YouTube do JSON - lub streszczenie AI jednym kliknięciem ⚡
+### ⚡ Pobieraj transkrypcje YouTube do JSON lub streszczaj je AI jednym kliknięciem ⚡
 
 <p>
   <img src="https://img.shields.io/badge/Tampermonkey-00485B?style=for-the-badge&logo=tampermonkey&logoColor=white" alt="Tampermonkey" />
