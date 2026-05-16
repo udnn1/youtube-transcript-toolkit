@@ -86,35 +86,7 @@ Pobieranie JSON działa bez żadnej konfiguracji. Streszczenia AI wymagają darm
 
 ---
 
-## Format pliku wynikowego
-
-```json
-{
-  "title": "Tytuł filmu",
-  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-  "videoId": "dQw4w9WgXcQ",
-  "exportedAt": "2026-05-15T10:30:00.000Z",
-  "segments": [
-    { "timestamp": "0:00", "seconds": 0,  "text": "Witajcie w tym filmie" },
-    { "timestamp": "0:05", "seconds": 5,  "text": "Dzisiaj omówimy..." },
-    { "timestamp": "0:12", "seconds": 12, "text": "podstawy tematu..." }
-  ],
-  "fullText": "Witajcie w tym filmie Dzisiaj omówimy... podstawy tematu..."
-}
-```
-
-| Pole         | Opis                                                              |
-| ------------ | ----------------------------------------------------------------- |
-| `title`      | Tytuł filmu (bez sufiksu " - YouTube")                            |
-| `url`        | Kanoniczny adres URL filmu                                        |
-| `videoId`    | Identyfikator filmu wyciągnięty z URL                             |
-| `exportedAt` | Znacznik czasu ISO 8601 momentu eksportu                          |
-| `segments[]` | Tablica `{ timestamp, seconds, text }` dla każdej linii transkrypcji |
-| `fullText`   | Cały tekst transkrypcji sklejony spacjami                         |
-
----
-
-## Rozwiązywanie problemów
+## Samodzielne rozwiązywanie problemów
 
 **Przycisk nie pojawia się po otwarciu panelu transkrypcji.**
 
