@@ -24,12 +24,12 @@
 
 ---
 
-Lekki skrypt Tampermonkey, który dodaje dwa przyciski na stronach z filmami YouTube:
+Lekki skrypt Tampermonkey, który dodaje dwa pływające przyciski na stronach z filmami YouTube:
 
 - **⬇ Pobierz JSON** - eksportuje całą transkrypcję jako uporządkowany plik JSON
 - **✨ Streść (Mistral)** - generuje streszczenie filmu w punktach kluczowych i pokazuje je w okienku, korzystając z darmowego API Mistral AI
 
-Przydatny do budowania przeszukiwalnych archiwów, tworzenia notatek z timestampami, cytowania konkretnych fragmentów filmu lub błyskawicznego ogarnięcia o czym jest długi film bez oglądania go w całości (szczególnie zagraniczne podcasty).
+Przydatny do budowania przeszukiwalnych archiwów, tworzenia notatek z timestampami, cytowania konkretnych fragmentów filmu lub błyskawicznego ogarnięcia o czym jest długi film bez oglądania go w całości.
 
 ---
 
@@ -42,6 +42,7 @@ Przydatny do budowania przeszukiwalnych archiwów, tworzenia notatek z timestamp
 - **Sformatowane streszczenie** - Markdown (nagłówki, pogrubienia, zagnieżdżone listy) renderowany w okienku
 - **Automatyczne ponawianie** - przy przekroczeniu limitu (HTTP 429) skrypt sam czeka i próbuje ponownie z odliczaniem
 - **Bezpieczne przechowywanie klucza** - klucz API zapisywany lokalnie w Tampermonkey, nigdy w kodzie
+- **Obsługa dwóch wariantów panelu transkrypcji** - zarówno klasycznego (`ytd-transcript-segment-renderer`), jak i nowego "modern transcript view" (`transcript-segment-view-model`)
 - **Obsługa SPA** - radzi sobie z nawigacją YouTube bez przeładowania strony
 - **Zero zależności** - czysty vanilla JS, bez zewnętrznych bibliotek
 
@@ -86,32 +87,7 @@ Pobieranie JSON działa bez żadnej konfiguracji. Streszczenia AI wymagają darm
 
 ---
 
-## Samodzielne rozwiązywanie problemów
-
-**Przycisk nie pojawia się po otwarciu panelu transkrypcji.**
-
-Otwórz konsolę przeglądarki (`F12` → zakładka **Console**) i wpisz:
-
-```js
-document.querySelectorAll('ytd-transcript-segment-renderer').length
-```
-
-- **Wynik > 0** → segmenty są obecne. Przewiń stronę - przycisk może być zasłonięty przez inny element.
-- **Wynik 0** → YouTube zmienił strukturę DOM. Zgłoś [issue](../../issues) z informacją o wersji przeglądarki.
-
-**Pobrany plik jest pusty / ma 0 segmentów.**
-
-Panel transkrypcji musi być w pełni wyrenderowany (musisz widzieć przewijaną listę segmentów) zanim klikniesz przycisk.
-
-**Streszczenie pokazuje błąd 429 / limit zapytań.**
-
-Skrypt automatycznie ponawia próbę (do 4 razy, z rosnącą przerwą 5→10→20→40 s). Jeśli mimo to się nie uda - film jest zbyt długi jak na limit tokenów/min darmowego tieru. Odczekaj minutę i kliknij ponownie.
-
-**Streszczenie zwraca błąd 401 / nieprawidłowy klucz.**
-
-Skrypt automatycznie kasuje błędny klucz. Kliknij przycisk streszczenia ponownie i wpisz poprawny klucz z [console.mistral.ai](https://console.mistral.ai).
-
-**Chcę zmienić zapisany klucz API.**
+## Chcę zmienić zapisany klucz API
 
 Kliknij ikonę Tampermonkey w pasku przeglądarki (będąc na stronie YouTube) → z menu wybierz **Resetuj klucz API Mistral**. Klucz zostanie usunięty, a przy następnym streszczeniu skrypt poprosi o nowy.
 
@@ -125,8 +101,4 @@ MIT - rób co chcesz.
 
 ## Współpraca
 
-Issues i pull requesty są mile widziane. Jeśli YouTube zmieni nazwy klas i skrypt przestanie działać, dołącz do zgłoszenia wynik komendy:
-
-```js
-document.querySelector('ytd-transcript-segment-renderer')?.outerHTML
-```
+Issues i pull requesty są mile widziane. Jeśli YouTube zmieni nazwy klas i skrypt przestanie działać.
