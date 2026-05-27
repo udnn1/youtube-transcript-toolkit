@@ -99,6 +99,6 @@ MIT - rób co chcesz.
 
 ---
 
-## Współpraca
+## Zgłoszenia
 
 Issues i pull requesty są mile widziane. Jeśli YouTube zmieni nazwy klas i skrypt przestanie działać.
