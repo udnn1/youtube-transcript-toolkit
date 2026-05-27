@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Transcript Downloader
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      2.1
 // @description  Download YouTube transcripts as JSON, or summarize them with Mistral AI
 // @match        https://www.youtube.com/watch*
 // @grant        GM_xmlhttpRequest
@@ -38,12 +38,32 @@
         return document.title.replace(/ - YouTube$/, '').trim();
     }
 
+    const TRANSCRIPT_VARIANTS = [
+        {
+            name: 'legacy',
+            segmentSelector: 'ytd-transcript-segment-renderer',
+            timestampSelector: '.segment-timestamp',
+            textSelector: '.segment-text, yt-formatted-string'
+        },
+        {
+            name: 'modern',
+            segmentSelector: 'transcript-segment-view-model',
+            timestampSelector: '.ytwTranscriptSegmentViewModelTimestamp',
+            textSelector: '.ytAttributedStringHost, span'
+        }
+    ];
+
+    function detectVariant() {
+        return TRANSCRIPT_VARIANTS.find(v => document.querySelector(v.segmentSelector)) || null;
+    }
+
     function collectSegments() {
-        const segments = document.querySelectorAll('ytd-transcript-segment-renderer');
+        const variant = detectVariant();
+        if (!variant) return [];
         const parsed = [];
-        segments.forEach(seg => {
-            const tsEl = seg.querySelector('.segment-timestamp');
-            const textEl = seg.querySelector('.segment-text') || seg.querySelector('yt-formatted-string');
+        document.querySelectorAll(variant.segmentSelector).forEach(seg => {
+            const tsEl = seg.querySelector(variant.timestampSelector);
+            const textEl = seg.querySelector(variant.textSelector);
             if (!tsEl || !textEl) return;
             const timestamp = tsEl.innerText.trim();
             const text = textEl.innerText.trim();
@@ -384,7 +404,7 @@
     }
 
     function checkAndInject() {
-        if (document.querySelector('ytd-transcript-segment-renderer')) {
+        if (detectVariant()) {
             injectButtons();
         } else {
             removeButtons();
