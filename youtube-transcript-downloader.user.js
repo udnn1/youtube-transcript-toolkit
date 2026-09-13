@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Transcript Downloader
 // @namespace    http://tampermonkey.net/
-// @version      3.1
+// @version      3.2
 // @description  Download YouTube transcripts as JSON, or summarize them with Google Gemini
 // @match        https://www.youtube.com/*
 // @grant        GM_xmlhttpRequest
@@ -22,7 +22,7 @@
     const MODEL_STORE = 'gemini_model';
     const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/';
     const DEFAULT_MODEL = 'gemini-flash-latest';
-    const FALLBACK_MODEL = 'gemini-2.5-flash';
+    const FALLBACK_MODEL = 'gemini-3.6-flash';
     const REQUEST_TIMEOUT_MS = 180000;
     const MAX_RETRIES = 3;
 
@@ -184,7 +184,9 @@
         const apiKey = getApiKey();
         if (!apiKey) return;
 
-        let model = getModel();
+        const primaryModel = getModel();
+        let model = primaryModel;
+        let fallbackAvailable = true;
         const data = buildData(parsed);
         const approxTokens = Math.round(data.fullText.length / 4);
         requestInFlight = true;
@@ -264,12 +266,19 @@
                     return;
                 }
                 if (res.status === 404) {
+                    if (model === FALLBACK_MODEL && primaryModel !== FALLBACK_MODEL) {
+                        log(`404 na zapasowym ${FALLBACK_MODEL} — wracam do ${primaryModel}`);
+                        fallbackAvailable = false;
+                        model = primaryModel;
+                        countdownThenRetry(60, attempt, `Model zapasowy ${FALLBACK_MODEL} jest niedostępny („${err.message.slice(0, 160)}”).\nWracam do ${primaryModel}.`);
+                        return;
+                    }
                     finish(`❌ Nie znaleziono modelu \`${model}\` (404): ${err.message}\n\nZmień model w menu Tampermonkey („Zmień model Gemini”).`);
                     return;
                 }
                 if (res.status === 429 || res.status === 503) {
                     const overloaded = res.status === 503;
-                    if (model !== FALLBACK_MODEL) {
+                    if (fallbackAvailable && model !== FALLBACK_MODEL) {
                         log(`${res.status} na ${model} — przełączam na ${FALLBACK_MODEL}`);
                         model = FALLBACK_MODEL;
                         countdownThenRetry(2, attempt, `${overloaded ? 'Model przeciążony' : 'Limit modelu wyczerpany'} („${err.message.slice(0, 160)}”).\nPrzełączam na ${FALLBACK_MODEL}.`);
