@@ -41,7 +41,7 @@ Przydatny do budowania przeszukiwalnych archiwów, tworzenia notatek z timestamp
 - **Pole `fullText`** - całość transkrypcji sklejona w jeden tekst do szybkiego skopiowania
 - **Streszczenia w punktach** - przez API Google Gemini (domyślnie model `gemini-flash-latest`), wynik w czytelnym popupie
 - **Zmiana modelu** - dowolny model Gemini ustawisz z menu Tampermonkey
-- **Model zapasowy** - gdy główny model zwróci limit (HTTP 429) lub przeciążenie (HTTP 503), skrypt przełącza się na `gemini-2.5-flash`, który ma osobną pulę limitów
+- **Model zapasowy** - gdy główny model zwróci limit (HTTP 429) lub przeciążenie (HTTP 503), skrypt przełącza się na `gemini-3.6-flash`, który ma osobną pulę limitów (a jeśli model zapasowy jest niedostępny, wraca do głównego i ponawia)
 - **Automatyczne ponawianie** - do 3 prób z odliczaniem, z uwzględnieniem czasu oczekiwania podanego przez API
 - **Czytelne komunikaty błędów** - podpowiedzi dla nieprawidłowego klucza, braku dostępu (403), nieznanego modelu (404) i zablokowanego połączenia
 - **Sformatowane streszczenie** - Markdown (nagłówki, pogrubienia, kursywa, `kod`, zagnieżdżone listy) renderowany w okienku
@@ -117,7 +117,9 @@ Pobieranie JSON działa bez żadnej konfiguracji. Streszczenia AI wymagają kluc
 Kliknij ikonę Tampermonkey w pasku przeglądarki (będąc na stronie YouTube):
 
 - **Resetuj klucz API Gemini** - usuwa zapisany klucz; przy następnym streszczeniu skrypt poprosi o nowy
-- **Zmień model Gemini** - wpisz nazwę modelu (np. `gemini-2.5-pro`); puste pole przywraca domyślny `gemini-flash-latest`
+- **Zmień model Gemini** - wpisz nazwę modelu (np. `gemini-3.6-flash`, aktualna lista: [ai.google.dev/gemini-api/docs/models](https://ai.google.dev/gemini-api/docs/models)); puste pole przywraca domyślny `gemini-flash-latest`
+
+> Starsze modele (np. rodzina `gemini-2.5-*`) zwracają 404 „no longer available to new users” dla nowych kont - wybieraj modele 3.x.
 
 ---
 
