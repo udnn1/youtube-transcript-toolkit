@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         YouTube Transcript Downloader
 // @namespace    http://tampermonkey.net/
-// @version      3.2
-// @description  Download YouTube transcripts as JSON, or summarize them with Google Gemini
+// @version      3.3
+// @description  Download or copy YouTube transcripts, or summarize them with Google Gemini
 // @match        https://www.youtube.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_setClipboard
 // @grant        GM_registerMenuCommand
 // @connect      generativelanguage.googleapis.com
 // @run-at       document-idle
@@ -16,19 +17,24 @@
     'use strict';
 
     const DL_BUTTON_ID = 'yt-transcript-dl-btn';
+    const COPY_BUTTON_ID = 'yt-transcript-copy-btn';
     const SUM_BUTTON_ID = 'yt-transcript-sum-btn';
     const POPUP_ID = 'yt-transcript-popup';
     const API_KEY_STORE = 'gemini_api_key';
     const MODEL_STORE = 'gemini_model';
-    const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/';
+    const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta';
     const DEFAULT_MODEL = 'gemini-flash-latest';
-    const FALLBACK_MODEL = 'gemini-3.6-flash';
+    // Używane tylko, gdy nie da się pobrać listy modeli z API.
+    const STATIC_FALLBACK_MODELS = ['gemini-flash-latest', 'gemini-flash-lite-latest'];
+    const MAX_MODEL_CANDIDATES = 4;
     const REQUEST_TIMEOUT_MS = 180000;
     const MAX_RETRIES = 3;
 
     let domObserver = null;
     let checkScheduled = false;
     let requestInFlight = false;
+    let runId = 0;
+    let modelCache = null;
 
     function log(...args) {
         console.log('[YT Transcript]', ...args);
@@ -146,6 +152,68 @@
         setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
     }
 
+    // ---------- Kopiowanie transkryptu ----------
+
+    function formatTranscriptText(data) {
+        return [
+            data.title,
+            data.url,
+            '',
+            ...data.segments.map(s => `[${s.timestamp}] ${s.text}`)
+        ].join('\n');
+    }
+
+    async function writeClipboard(text) {
+        // GM_setClipboard nie wymaga aktywnego gestu użytkownika (otwieranie panelu transkrypcji trwa kilka sekund)
+        if (typeof GM_setClipboard === 'function') {
+            try {
+                GM_setClipboard(text, 'text');
+                return true;
+            } catch (e) {
+                log('GM_setClipboard nie zadziałał', e);
+            }
+        }
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch (e) {
+            log('navigator.clipboard nie zadziałał', e);
+        }
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+        document.body.appendChild(ta);
+        ta.select();
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { /* ignore */ }
+        ta.remove();
+        return ok;
+    }
+
+    function setButtonLabel(btn, label, restoreAfterMs) {
+        if (!btn) return;
+        clearTimeout(btn._restoreTimer);
+        btn.textContent = label;
+        if (restoreAfterMs) {
+            btn._restoreTimer = setTimeout(() => { btn.textContent = btn.dataset.label; }, restoreAfterMs);
+        }
+    }
+
+    async function copyTranscript() {
+        const btn = document.getElementById(COPY_BUTTON_ID);
+        setButtonLabel(btn, '⏳ Pobieram…');
+        const parsed = await ensureTranscriptSegments();
+        if (!parsed.length) {
+            setButtonLabel(btn, btn?.dataset.label);
+            alert(NO_TRANSCRIPT_MSG);
+            return;
+        }
+        const ok = await writeClipboard(formatTranscriptText(buildData(parsed)));
+        setButtonLabel(btn, ok ? `✅ Skopiowano (${parsed.length} linii)` : '❌ Nie udało się skopiować', 2500);
+    }
+
+    // ---------- Gemini ----------
+
     function sanitizeKey(raw) {
         return (raw || '')
             .trim()
@@ -163,19 +231,180 @@
         return key;
     }
 
-    function getModel() {
-        return (GM_getValue(MODEL_STORE, '') || DEFAULT_MODEL).trim();
+    function getUserModel() {
+        return (GM_getValue(MODEL_STORE, '') || '').trim().replace(/^models\//, '');
     }
 
-    async function summarizeTranscript() {
-        if (requestInFlight) {
-            log('Zapytanie już trwa — pomijam kolejne kliknięcie.');
-            return;
+    function gmRequest(details) {
+        return new Promise(resolve => {
+            GM_xmlhttpRequest({
+                ...details,
+                timeout: REQUEST_TIMEOUT_MS,
+                onload: (res) => resolve(res),
+                ontimeout: () => resolve({ status: -1, kind: 'timeout', responseText: '' }),
+                onabort: () => resolve({ status: -1, kind: 'abort', responseText: '' }),
+                onerror: (err) => resolve({
+                    status: 0,
+                    kind: 'error',
+                    responseText: '',
+                    errorText: err?.error || err?.statusText || ''
+                })
+            });
+        });
+    }
+
+    function parseError(res) {
+        try {
+            const err = JSON.parse(res.responseText).error || {};
+            const details = err.details || [];
+            const reason = details.find(d => d.reason)?.reason || '';
+            const retryDelay = details.find(d => d.retryDelay)?.retryDelay || '';
+            return {
+                message: err.message || res.responseText.slice(0, 300),
+                status: err.status || '',
+                reason,
+                retrySecs: parseFloat(retryDelay) || 0,
+                raw: res.responseText || ''
+            };
+        } catch (e) {
+            const txt = (res.responseText || '').slice(0, 300);
+            return { message: txt, status: '', reason: '', retrySecs: 0, raw: txt };
+        }
+    }
+
+    // Komunikat dla błędów klucza / dostępu / sieci, których nie naprawi zmiana modelu; w innym wypadku null.
+    function describeAccessError(res, err) {
+        if (res.status === 0) {
+            return '❌ Połączenie z generativelanguage.googleapis.com zostało zablokowane.\n\n' +
+                (res.errorText ? `Szczegóły: \`${res.errorText}\`\n\n` : '') +
+                '- Tampermonkey → ten skrypt → Ustawienia → sprawdź, czy domena nie jest na liście zablokowanych (i zezwól na nią, jeśli Tampermonkey pytał)\n' +
+                '- Wyłącz na chwilę adblock / VPN / firewall i spróbuj ponownie';
+        }
+        if (res.status === -1) {
+            return res.kind === 'timeout'
+                ? `❌ Gemini nie odpowiedział w ciągu ${REQUEST_TIMEOUT_MS / 1000} s. Spróbuj ponownie.`
+                : '❌ Zapytanie do Gemini API zostało przerwane.';
+        }
+        if (res.status === 401 || /API_KEY_INVALID|API key not valid|API key expired/i.test(err.reason + ' ' + err.message)) {
+            GM_setValue(API_KEY_STORE, '');
+            modelCache = null;
+            return `❌ Gemini odrzucił klucz API: ${err.message}\n\n` +
+                '- Skopiuj klucz ponownie z aistudio.google.com/apikey\n' +
+                '- Zapisany klucz został usunięty — przy następnym kliknięciu skrypt poprosi o nowy';
+        }
+        if (res.status === 403) {
+            return `❌ Brak dostępu (403): ${err.message}\n\n` +
+                '- W Google Cloud projektu klucza musi być włączone **Generative Language API**\n' +
+                '- Sprawdź restrykcje klucza (HTTP referrer / IP / dozwolone API) — klucz z restrykcją „HTTP referrer” nie zadziała z Tampermonkey\n' +
+                '- Gemini API może być niedostępne dla konta w Twoim regionie';
+        }
+        if (res.status === 400 && /FAILED_PRECONDITION|location is not supported|User location/i.test(err.status + ' ' + err.message)) {
+            return `❌ Gemini API odrzuciło zapytanie: ${err.message}\n\n` +
+                '- Darmowy poziom Gemini API bywa niedostępny w części krajów — może być potrzebne włączenie płatności w projekcie Google Cloud';
+        }
+        return null;
+    }
+
+    async function listModels(apiKey) {
+        if (modelCache?.key === apiKey) return { list: modelCache.list };
+        const res = await gmRequest({
+            method: 'GET',
+            url: `${GEMINI_API}/models?pageSize=1000`,
+            headers: { 'x-goog-api-key': apiKey }
+        });
+        log('Lista modeli: HTTP', res.status);
+        if (res.status < 200 || res.status >= 300) return { res };
+        try {
+            const list = (JSON.parse(res.responseText).models || [])
+                .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+                .map(m => m.name.replace(/^models\//, ''));
+            modelCache = { key: apiKey, list };
+            return { list };
+        } catch (e) {
+            log('Nie udało się sparsować listy modeli', e);
+            return { list: null };
+        }
+    }
+
+    // Tekstowe modele Flash: najpierw stabilne, pełne (nie-lite), aliasy -latest, potem najnowsza wersja.
+    function rankTextModels(list) {
+        const version = (n) => parseFloat((n.match(/^gemini-(\d+(?:\.\d+)?)/) || [])[1]) || 0;
+        return list
+            .filter(n => /^gemini-/.test(n) && /flash/.test(n))
+            .filter(n => !/image|tts|audio|live|embed|robotics|computer-use|native|-exp/.test(n))
+            .sort((a, b) => {
+                const pa = /preview/.test(a), pb = /preview/.test(b);
+                if (pa !== pb) return pa ? 1 : -1;
+                const la = /lite/.test(a), lb = /lite/.test(b);
+                if (la !== lb) return la ? 1 : -1;
+                const xa = /-latest$/.test(a), xb = /-latest$/.test(b);
+                if (xa !== xb) return xa ? -1 : 1;
+                return version(b) - version(a) || a.length - b.length;
+            });
+    }
+
+    // Zwraca { candidates } — modele do wypróbowania po kolei — albo { fatal } z komunikatem błędu.
+    async function resolveModelCandidates(apiKey) {
+        const userModel = getUserModel();
+        const { list, res } = await listModels(apiKey);
+
+        if (res) {
+            const accessErr = describeAccessError(res, parseError(res));
+            if (accessErr) return { fatal: accessErr };
         }
 
-        requestInFlight = true;
+        let candidates;
+        if (list && list.length) {
+            candidates = [];
+            if (userModel) {
+                if (list.includes(userModel)) candidates.push(userModel);
+                else log(`Model ustawiony ręcznie („${userModel}”) nie jest dostępny dla tego klucza — pomijam`);
+            }
+            if (list.includes(DEFAULT_MODEL)) candidates.push(DEFAULT_MODEL);
+            candidates.push(...rankTextModels(list));
+        } else {
+            candidates = [userModel, ...STATIC_FALLBACK_MODELS].filter(Boolean);
+        }
+
+        candidates = [...new Set(candidates)].slice(0, MAX_MODEL_CANDIDATES);
+        log('Kandydaci modeli:', candidates);
+        if (!candidates.length) {
+            return { fatal: '❌ Twój klucz API nie ma dostępu do żadnego modelu Gemini Flash.\n\nUstaw model ręcznie w menu Tampermonkey („Zmień model Gemini”).' };
+        }
+        return { candidates };
+    }
+
+    // Odlicza z komunikatem w popupie; zwraca false, jeśli użytkownik zamknął popup lub zmienił film.
+    async function countdown(seconds, textFn, myRun) {
+        for (let left = Math.ceil(seconds); left > 0; left--) {
+            if (myRun !== runId || !document.getElementById(POPUP_ID)) return false;
+            showPopup(textFn(left), true);
+            await sleep(1000);
+        }
+        return myRun === runId && !!document.getElementById(POPUP_ID);
+    }
+
+    function extractSummary(res) {
+        const json = JSON.parse(res.responseText);
+        if (json.promptFeedback?.blockReason) {
+            return `❌ Gemini zablokował zapytanie (${json.promptFeedback.blockReason}).`;
+        }
+        const cand = json.candidates?.[0];
+        const summary = (cand?.content?.parts || [])
+            .filter(p => p.text && !p.thought)
+            .map(p => p.text)
+            .join('')
+            .trim();
+        if (!summary) {
+            return `❌ Pusta odpowiedź od API${cand?.finishReason ? ` (finishReason: ${cand.finishReason})` : ''}.`;
+        }
+        const note = cand.finishReason === 'MAX_TOKENS' ? '\n\n*(odpowiedź ucięta — limit długości)*' : '';
+        return summary + note;
+    }
+
+    async function runSummary(myRun) {
         const parsed = await ensureTranscriptSegments();
-        requestInFlight = false;
+        if (myRun !== runId) return;
         if (!parsed.length) {
             alert(NO_TRANSCRIPT_MSG);
             return;
@@ -184,14 +413,8 @@
         const apiKey = getApiKey();
         if (!apiKey) return;
 
-        const primaryModel = getModel();
-        let model = primaryModel;
-        let fallbackAvailable = true;
         const data = buildData(parsed);
         const approxTokens = Math.round(data.fullText.length / 4);
-        requestInFlight = true;
-        showPopup(`⏳ Generuję streszczenie (${model}, ~${approxTokens} tokenów)...`, true);
-
         const userPrompt = [
             'Streść poniższy transkrypt filmu z YouTube w formie listy najważniejszych punktów kluczowych.',
             'Pisz po polsku. Używaj zwięzłych bulletów (zaczynaj od "- "). Pomiń wtręty, dygresje i powtórzenia.',
@@ -202,152 +425,128 @@
             data.fullText
         ].join('\n');
 
-        function finish(content) {
-            requestInFlight = false;
-            showPopup(content, false);
+        showPopup('⏳ Sprawdzam dostępne modele Gemini...', true);
+        const resolved = await resolveModelCandidates(apiKey);
+        if (myRun !== runId) return;
+        if (resolved.fatal) {
+            showPopup(resolved.fatal, false);
+            return;
         }
 
-        function parseError(res) {
-            try {
-                const err = JSON.parse(res.responseText).error || {};
-                const details = err.details || [];
-                const reason = details.find(d => d.reason)?.reason || '';
-                const retryDelay = details.find(d => d.retryDelay)?.retryDelay || '';
-                return {
-                    message: err.message || res.responseText.slice(0, 300),
-                    status: err.status || '',
-                    reason,
-                    retrySecs: parseFloat(retryDelay) || 0
-                };
-            } catch (e) {
-                return { message: (res.responseText || '').slice(0, 300), status: '', reason: '', retrySecs: 0 };
-            }
-        }
+        const queue = resolved.candidates;
+        const tried = [];
+        let idx = 0;
+        let attempt = 0;
+        let lastErr = null;
 
-        function countdownThenRetry(seconds, attempt, reason) {
-            let left = Math.ceil(seconds);
-            const tick = () => {
-                if (!document.getElementById(POPUP_ID)) {
-                    requestInFlight = false;
-                    return;
-                }
-                showPopup(`⏳ ${reason}\n\nPonawiam za ${left}s... (próba ${attempt + 1}/${MAX_RETRIES}, model ${model})`, true);
-                if (left <= 0) { sendRequest(attempt + 1); return; }
-                left--;
-                setTimeout(tick, 1000);
-            };
-            tick();
-        }
+        while (idx < queue.length) {
+            const model = queue[idx];
+            showPopup(`⏳ Generuję streszczenie (${model}, ~${approxTokens} tokenów)...`, true);
 
-        function handleResponse(res, attempt) {
-            log('Odpowiedź HTTP', res.status, (res.responseText || '').slice(0, 300));
-
-            if (res.status === 0) {
-                finish('❌ Połączenie z generativelanguage.googleapis.com zostało zablokowane (HTTP 0).\n\n' +
-                    '- Tampermonkey → ten skrypt → Ustawienia → sprawdź, czy domena nie jest na liście zablokowanych\n' +
-                    '- Wyłącz na chwilę adblock / VPN / firewall i spróbuj ponownie');
-                return;
-            }
-
-            if (res.status < 200 || res.status >= 300) {
-                const err = parseError(res);
-
-                if (/API_KEY_INVALID|API key not valid|API_KEY/i.test(err.reason + err.message) || res.status === 401) {
-                    GM_setValue(API_KEY_STORE, '');
-                    finish(`❌ Gemini odrzucił klucz API: ${err.message}\n\n` +
-                        '- Skopiuj klucz ponownie z aistudio.google.com/apikey\n' +
-                        '- Zapisany klucz został usunięty — przy następnym kliknięciu skrypt poprosi o nowy');
-                    return;
-                }
-                if (res.status === 403) {
-                    finish(`❌ Brak dostępu (403): ${err.message}\n\n` +
-                        '- W Google Cloud projektu klucza musi być włączone **Generative Language API**\n' +
-                        '- Gemini API może być niedostępne dla konta w Twoim regionie lub z ograniczeniami klucza (restrykcje HTTP referrer / IP)');
-                    return;
-                }
-                if (res.status === 404) {
-                    if (model === FALLBACK_MODEL && primaryModel !== FALLBACK_MODEL) {
-                        log(`404 na zapasowym ${FALLBACK_MODEL} — wracam do ${primaryModel}`);
-                        fallbackAvailable = false;
-                        model = primaryModel;
-                        countdownThenRetry(60, attempt, `Model zapasowy ${FALLBACK_MODEL} jest niedostępny („${err.message.slice(0, 160)}”).\nWracam do ${primaryModel}.`);
-                        return;
-                    }
-                    finish(`❌ Nie znaleziono modelu \`${model}\` (404): ${err.message}\n\nZmień model w menu Tampermonkey („Zmień model Gemini”).`);
-                    return;
-                }
-                if (res.status === 429 || res.status === 503) {
-                    const overloaded = res.status === 503;
-                    if (fallbackAvailable && model !== FALLBACK_MODEL) {
-                        log(`${res.status} na ${model} — przełączam na ${FALLBACK_MODEL}`);
-                        model = FALLBACK_MODEL;
-                        countdownThenRetry(2, attempt, `${overloaded ? 'Model przeciążony' : 'Limit modelu wyczerpany'} („${err.message.slice(0, 160)}”).\nPrzełączam na ${FALLBACK_MODEL}.`);
-                        return;
-                    }
-                    if (attempt >= MAX_RETRIES) {
-                        finish(`❌ ${overloaded ? 'Gemini jest przeciążony' : 'Wyczerpany limit Gemini'} mimo ponawiania.\n\nOdpowiedź API: \`${err.message}\`\n\n` +
-                            `- Transkrypt to ok. **${approxTokens} tokenów**\n` +
-                            '- Jeśli komunikat mówi o limicie **dziennym** (per day), trzeba poczekać do resetu (północ czasu pacyficznego, ok. 9:00 w Polsce)\n' +
-                            '- Swoje limity sprawdzisz na aistudio.google.com → Usage / Rate limits');
-                        return;
-                    }
-                    const wait = err.retrySecs || (overloaded ? 15 * (attempt + 1) : 60);
-                    countdownThenRetry(wait, attempt, `${overloaded ? 'Gemini przeciążony' : 'Limit Gemini'} („${err.message.slice(0, 160)}”).`);
-                    return;
-                }
-                finish(`❌ Błąd API (HTTP ${res.status}${err.status ? ' ' + err.status : ''}):\n${err.message}`);
-                return;
-            }
-
-            try {
-                const json = JSON.parse(res.responseText);
-                if (json.promptFeedback?.blockReason) {
-                    finish(`❌ Gemini zablokował zapytanie (${json.promptFeedback.blockReason}).`);
-                    return;
-                }
-                const cand = json.candidates?.[0];
-                const summary = (cand?.content?.parts || [])
-                    .filter(p => p.text && !p.thought)
-                    .map(p => p.text)
-                    .join('')
-                    .trim();
-                if (summary) {
-                    const note = cand.finishReason === 'MAX_TOKENS' ? '\n\n*(odpowiedź ucięta — limit długości)*' : '';
-                    finish(summary + note);
-                } else {
-                    finish(`❌ Pusta odpowiedź od API${cand?.finishReason ? ` (finishReason: ${cand.finishReason})` : ''}.`);
-                }
-            } catch (e) {
-                log('Błąd parsowania', e);
-                finish('❌ Nie udało się sparsować odpowiedzi API.');
-            }
-        }
-
-        function sendRequest(attempt) {
-            GM_xmlhttpRequest({
+            const res = await gmRequest({
                 method: 'POST',
-                url: `${GEMINI_BASE}${encodeURIComponent(model)}:generateContent`,
+                url: `${GEMINI_API}/models/${encodeURIComponent(model)}:generateContent`,
                 headers: {
                     'Content-Type': 'application/json',
                     'x-goog-api-key': apiKey
                 },
                 data: JSON.stringify({
                     contents: [{ role: 'user', parts: [{ text: userPrompt }] }]
-                }),
-                timeout: REQUEST_TIMEOUT_MS,
-                onload: (res) => handleResponse(res, attempt),
-                ontimeout: () => finish(`❌ Gemini nie odpowiedział w ciągu ${REQUEST_TIMEOUT_MS / 1000} s. Spróbuj ponownie.`),
-                onabort: () => finish('❌ Zapytanie do Gemini API zostało przerwane.'),
-                onerror: (err) => {
-                    log('Błąd sieci', err);
-                    finish(`❌ Błąd sieci podczas połączenia z Gemini API.\n${err?.error || err?.statusText || ''}\n\n` +
-                        'Sprawdź, czy Tampermonkey nie blokuje domeny generativelanguage.googleapis.com i czy adblock/VPN nie przerywa połączenia.');
-                }
+                })
             });
+            if (myRun !== runId) return;
+            log('Odpowiedź HTTP', model, res.status, (res.responseText || '').slice(0, 300));
+
+            if (res.status >= 200 && res.status < 300) {
+                try {
+                    showPopup(extractSummary(res), false);
+                } catch (e) {
+                    log('Błąd parsowania', e);
+                    showPopup('❌ Nie udało się sparsować odpowiedzi API.', false);
+                }
+                return;
+            }
+
+            const err = parseError(res);
+            lastErr = { model, status: res.status, err };
+            const accessErr = describeAccessError(res, err);
+            if (accessErr) {
+                showPopup(accessErr, false);
+                return;
+            }
+
+            // Model nie istnieje / wycofany / niedostępny dla konta → następny kandydat
+            if (res.status === 404 ||
+                (res.status === 400 && /not found|not supported|unsupported|deprecated|no longer available/i.test(err.message))) {
+                log(`Model ${model} niedostępny (${res.status}) — próbuję następnego`);
+                tried.push(`${model} (${res.status})`);
+                idx++;
+                attempt = 0;
+                continue;
+            }
+
+            // Limit / przeciążenie → najpierw inny model (osobna pula limitów), potem ponawianie z odczekaniem
+            if (res.status === 429 || res.status === 500 || res.status === 503) {
+                const overloaded = res.status !== 429;
+                const label = overloaded ? 'Gemini przeciążony' : 'Limit Gemini wyczerpany';
+                tried.push(`${model} (${res.status})`);
+                if (idx + 1 < queue.length) {
+                    const next = queue[idx + 1];
+                    const ok = await countdown(2, (left) =>
+                        `⏳ ${label} na ${model} („${err.message.slice(0, 160)}”).\n\nPrzełączam na ${next} za ${left}s...`, myRun);
+                    if (!ok) return;
+                    idx++;
+                    attempt = 0;
+                    continue;
+                }
+                if (attempt >= MAX_RETRIES || /per.?day|PerDay/i.test(err.raw)) break;
+                const wait = err.retrySecs || (overloaded ? 15 * (attempt + 1) : 60);
+                const ok = await countdown(wait, (left) =>
+                    `⏳ ${label} („${err.message.slice(0, 160)}”).\n\nPonawiam za ${left}s... (próba ${attempt + 2}/${MAX_RETRIES + 1}, model ${model})`, myRun);
+                if (!ok) return;
+                attempt++;
+                continue;
+            }
+
+            showPopup(`❌ Błąd API (HTTP ${res.status}${err.status ? ' ' + err.status : ''}, model ${model}):\n${err.message}`, false);
+            return;
         }
 
-        sendRequest(0);
+        const lastStatus = lastErr?.status;
+        if (lastStatus === 429 || lastStatus === 500 || lastStatus === 503) {
+            showPopup(`❌ ${lastStatus === 429 ? 'Wyczerpany limit Gemini' : 'Gemini jest przeciążony'} na wszystkich próbowanych modelach.\n\n` +
+                `Odpowiedź API: \`${lastErr.err.message}\`\n\n` +
+                `- Próbowane: ${[...new Set(tried)].join(', ')}\n` +
+                `- Transkrypt to ok. **${approxTokens} tokenów**\n` +
+                '- Jeśli komunikat mówi o limicie **dziennym** (per day), trzeba poczekać do resetu (północ czasu pacyficznego, ok. 9:00 w Polsce)\n' +
+                '- Swoje limity sprawdzisz na aistudio.google.com → Usage / Rate limits', false);
+            return;
+        }
+        showPopup('❌ Żaden z modeli Gemini nie jest dostępny dla tego klucza.\n\n' +
+            `- Próbowane: ${tried.join(', ') || queue.join(', ')}\n` +
+            (lastErr ? `- Ostatni błąd: \`${lastErr.err.message}\`\n` : '') +
+            '- Ustaw model ręcznie w menu Tampermonkey („Zmień model Gemini”) — skrypt pokaże tam listę dostępnych modeli', false);
     }
+
+    async function summarizeTranscript() {
+        if (requestInFlight) {
+            log('Zapytanie już trwa — pomijam kolejne kliknięcie.');
+            if (!document.getElementById(POPUP_ID)) showPopup('⏳ Streszczenie jest w trakcie generowania...', true);
+            return;
+        }
+        requestInFlight = true;
+        const myRun = ++runId;
+        try {
+            await runSummary(myRun);
+        } catch (e) {
+            log('Nieoczekiwany błąd', e);
+            if (myRun === runId) showPopup(`❌ Nieoczekiwany błąd: ${e?.message || e}`, false);
+        } finally {
+            if (myRun === runId) requestInFlight = false;
+        }
+    }
+
+    // ---------- Popup ----------
 
     function closePopup() {
         document.getElementById(POPUP_ID)?.remove();
@@ -492,10 +691,13 @@
         document.body.appendChild(overlay);
     }
 
+    // ---------- Przyciski ----------
+
     function makeButton(id, label, bottom, bg, bgHover, onClick) {
         const btn = document.createElement('button');
         btn.id = id;
         btn.textContent = label;
+        btn.dataset.label = label;
         btn.style.cssText = [
             'position: fixed',
             `bottom: ${bottom}px`,
@@ -528,15 +730,21 @@
                 makeButton(DL_BUTTON_ID, '⬇ Pobierz JSON', 24, '#ff0000', '#c00', downloadTranscript)
             );
         }
+        if (!document.getElementById(COPY_BUTTON_ID)) {
+            document.body.appendChild(
+                makeButton(COPY_BUTTON_ID, '📋 Kopiuj transkrypt', 76, '#3f3f3f', '#565656', copyTranscript)
+            );
+        }
         if (!document.getElementById(SUM_BUTTON_ID)) {
             document.body.appendChild(
-                makeButton(SUM_BUTTON_ID, '✨ Streść (Gemini)', 76, '#1a73e8', '#1558b0', summarizeTranscript)
+                makeButton(SUM_BUTTON_ID, '✨ Streść (Gemini)', 128, '#1a73e8', '#1558b0', summarizeTranscript)
             );
         }
     }
 
     function removeButtons() {
         document.getElementById(DL_BUTTON_ID)?.remove();
+        document.getElementById(COPY_BUTTON_ID)?.remove();
         document.getElementById(SUM_BUTTON_ID)?.remove();
     }
 
@@ -565,19 +773,28 @@
     if (typeof GM_registerMenuCommand === 'function') {
         GM_registerMenuCommand('Resetuj klucz API Gemini', () => {
             GM_setValue(API_KEY_STORE, '');
+            modelCache = null;
             alert('Klucz API Gemini został usunięty. Przy następnym streszczeniu skrypt poprosi o nowy.');
         });
-        GM_registerMenuCommand('Zmień model Gemini', () => {
-            const m = window.prompt(`Nazwa modelu Gemini (puste = ${DEFAULT_MODEL}):`, getModel());
+        GM_registerMenuCommand('Zmień model Gemini', async () => {
+            let hint = '';
+            const key = sanitizeKey(GM_getValue(API_KEY_STORE, ''));
+            if (key) {
+                const { list } = await listModels(key);
+                const gem = (list || []).filter(n => /^gemini-/.test(n)).slice(0, 25);
+                if (gem.length) hint = `\n\nDostępne dla Twojego klucza:\n${gem.join('\n')}`;
+            }
+            const m = window.prompt(`Nazwa modelu Gemini (puste = automatyczny wybór, zaczynając od ${DEFAULT_MODEL}):${hint}`, getUserModel());
             if (m === null) return;
-            GM_setValue(MODEL_STORE, m.trim());
-            alert(`Model ustawiony na: ${getModel()}`);
+            GM_setValue(MODEL_STORE, m.trim().replace(/^models\//, ''));
+            alert(`Model ustawiony na: ${getUserModel() || 'automatyczny wybór'}`);
         });
     }
 
     document.addEventListener('yt-navigate-finish', () => {
         removeButtons();
         closePopup();
+        runId++;
         requestInFlight = false;
         startObserver();
     });
