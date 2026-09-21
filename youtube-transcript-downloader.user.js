@@ -24,7 +24,6 @@
     const MODEL_STORE = 'gemini_model';
     const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta';
     const DEFAULT_MODEL = 'gemini-flash-latest';
-    // Używane tylko, gdy nie da się pobrać listy modeli z API.
     const STATIC_FALLBACK_MODELS = ['gemini-flash-latest', 'gemini-flash-lite-latest'];
     const MAX_MODEL_CANDIDATES = 4;
     const REQUEST_TIMEOUT_MS = 180000;
@@ -152,8 +151,6 @@
         setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
     }
 
-    // ---------- Kopiowanie transkryptu ----------
-
     function formatTranscriptText(data) {
         return [
             data.title,
@@ -164,7 +161,6 @@
     }
 
     async function writeClipboard(text) {
-        // GM_setClipboard nie wymaga aktywnego gestu użytkownika (otwieranie panelu transkrypcji trwa kilka sekund)
         if (typeof GM_setClipboard === 'function') {
             try {
                 GM_setClipboard(text, 'text');
@@ -185,7 +181,7 @@
         document.body.appendChild(ta);
         ta.select();
         let ok = false;
-        try { ok = document.execCommand('copy'); } catch (e) { /* ignore */ }
+        try { ok = document.execCommand('copy'); } catch (e) { }
         ta.remove();
         return ok;
     }
@@ -211,8 +207,6 @@
         const ok = await writeClipboard(formatTranscriptText(buildData(parsed)));
         setButtonLabel(btn, ok ? `✅ Skopiowano (${parsed.length} linii)` : '❌ Nie udało się skopiować', 2500);
     }
-
-    // ---------- Gemini ----------
 
     function sanitizeKey(raw) {
         return (raw || '')
@@ -272,7 +266,6 @@
         }
     }
 
-    // Komunikat dla błędów klucza / dostępu / sieci, których nie naprawi zmiana modelu; w innym wypadku null.
     function describeAccessError(res, err) {
         if (res.status === 0) {
             return '❌ Połączenie z generativelanguage.googleapis.com zostało zablokowane.\n\n' +
@@ -326,7 +319,6 @@
         }
     }
 
-    // Tekstowe modele Flash: najpierw stabilne, pełne (nie-lite), aliasy -latest, potem najnowsza wersja.
     function rankTextModels(list) {
         const version = (n) => parseFloat((n.match(/^gemini-(\d+(?:\.\d+)?)/) || [])[1]) || 0;
         return list
@@ -343,7 +335,6 @@
             });
     }
 
-    // Zwraca { candidates } — modele do wypróbowania po kolei — albo { fatal } z komunikatem błędu.
     async function resolveModelCandidates(apiKey) {
         const userModel = getUserModel();
         const { list, res } = await listModels(apiKey);
@@ -374,7 +365,6 @@
         return { candidates };
     }
 
-    // Odlicza z komunikatem w popupie; zwraca false, jeśli użytkownik zamknął popup lub zmienił film.
     async function countdown(seconds, textFn, myRun) {
         for (let left = Math.ceil(seconds); left > 0; left--) {
             if (myRun !== runId || !document.getElementById(POPUP_ID)) return false;
@@ -475,7 +465,6 @@
                 return;
             }
 
-            // Model nie istnieje / wycofany / niedostępny dla konta → następny kandydat
             if (res.status === 404 ||
                 (res.status === 400 && /not found|not supported|unsupported|deprecated|no longer available/i.test(err.message))) {
                 log(`Model ${model} niedostępny (${res.status}) — próbuję następnego`);
@@ -485,7 +474,6 @@
                 continue;
             }
 
-            // Limit / przeciążenie → najpierw inny model (osobna pula limitów), potem ponawianie z odczekaniem
             if (res.status === 429 || res.status === 500 || res.status === 503) {
                 const overloaded = res.status !== 429;
                 const label = overloaded ? 'Gemini przeciążony' : 'Limit Gemini wyczerpany';
@@ -545,8 +533,6 @@
             if (myRun === runId) requestInFlight = false;
         }
     }
-
-    // ---------- Popup ----------
 
     function closePopup() {
         document.getElementById(POPUP_ID)?.remove();
@@ -690,8 +676,6 @@
         document.addEventListener('keydown', onEscClose);
         document.body.appendChild(overlay);
     }
-
-    // ---------- Przyciski ----------
 
     function makeButton(id, label, bottom, bg, bgHover, onClick) {
         const btn = document.createElement('button');
