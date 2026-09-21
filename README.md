@@ -43,7 +43,7 @@ Przydatny do budowania przeszukiwalnych archiwów, tworzenia notatek z timestamp
 - **Pole `fullText`** - całość transkrypcji sklejona w jeden tekst do szybkiego skopiowania
 - **Streszczenia w punktach** - przez API Google Gemini (domyślnie model `gemini-flash-latest`), wynik w czytelnym popupie
 - **Automatyczny wybór modelu** - skrypt pobiera z API listę modeli dostępnych dla Twojego klucza i wybiera najlepszy tekstowy model Flash; nie trzeba ręcznie śledzić nazw ani wycofywanych wersji
-- **Modele zapasowe** - gdy model zwróci 404 (wycofany / niedostępny dla konta), limit (HTTP 429) lub przeciążenie (HTTP 500/503), skrypt przechodzi na kolejny dostępny model z osobną pulą limitów
+- **Modele zapasowe** - kolejka naprzemiennie zawiera modele Flash i Flash-Lite (osobne pule mocy i limitów); przy 404 model jest pomijany, a przy limicie (HTTP 429) lub przeciążeniu (HTTP 500/503) skrypt przechodzi na kolejny model, a gdy wszystkie są zajęte - odczekuje i ponawia całą kolejkę
 - **Zmiana modelu** - dowolny model Gemini ustawisz z menu Tampermonkey (menu pokazuje listę modeli dostępnych dla Twojego klucza)
 - **Automatyczne ponawianie** - do 3 prób z odliczaniem, z uwzględnieniem czasu oczekiwania podanego przez API
 - **Czytelne komunikaty błędów** - podpowiedzi dla nieprawidłowego klucza, braku dostępu (403), regionu bez dostępu do API, niedostępnych modeli, przekroczonego czasu i zablokowanego połączenia

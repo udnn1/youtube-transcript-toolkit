@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Transcript Downloader
 // @namespace    http://tampermonkey.net/
-// @version      3.3
+// @version      3.4
 // @description  Download or copy YouTube transcripts, or summarize them with Google Gemini
 // @match        https://www.youtube.com/*
 // @grant        GM_xmlhttpRequest
@@ -25,7 +25,7 @@
     const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta';
     const DEFAULT_MODEL = 'gemini-flash-latest';
     const STATIC_FALLBACK_MODELS = ['gemini-flash-latest', 'gemini-flash-lite-latest'];
-    const MAX_MODEL_CANDIDATES = 4;
+    const MAX_MODEL_CANDIDATES = 6;
     const REQUEST_TIMEOUT_MS = 180000;
     const MAX_RETRIES = 3;
 
@@ -321,18 +321,24 @@
 
     function rankTextModels(list) {
         const version = (n) => parseFloat((n.match(/^gemini-(\d+(?:\.\d+)?)/) || [])[1]) || 0;
-        return list
+        const sorted = list
             .filter(n => /^gemini-/.test(n) && /flash/.test(n))
             .filter(n => !/image|tts|audio|live|embed|robotics|computer-use|native|-exp/.test(n))
             .sort((a, b) => {
                 const pa = /preview/.test(a), pb = /preview/.test(b);
                 if (pa !== pb) return pa ? 1 : -1;
-                const la = /lite/.test(a), lb = /lite/.test(b);
-                if (la !== lb) return la ? 1 : -1;
                 const xa = /-latest$/.test(a), xb = /-latest$/.test(b);
                 if (xa !== xb) return xa ? -1 : 1;
                 return version(b) - version(a) || a.length - b.length;
             });
+        const full = sorted.filter(n => !/lite/.test(n));
+        const lite = sorted.filter(n => /lite/.test(n));
+        const mixed = [];
+        for (let i = 0; i < Math.max(full.length, lite.length); i++) {
+            if (full[i]) mixed.push(full[i]);
+            if (lite[i]) mixed.push(lite[i]);
+        }
+        return mixed;
     }
 
     async function resolveModelCandidates(apiKey) {
@@ -351,7 +357,6 @@
                 if (list.includes(userModel)) candidates.push(userModel);
                 else log(`Model ustawiony ręcznie („${userModel}”) nie jest dostępny dla tego klucza — pomijam`);
             }
-            if (list.includes(DEFAULT_MODEL)) candidates.push(DEFAULT_MODEL);
             candidates.push(...rankTextModels(list));
         } else {
             candidates = [userModel, ...STATIC_FALLBACK_MODELS].filter(Boolean);
@@ -423,95 +428,99 @@
             return;
         }
 
-        const queue = resolved.candidates;
+        const queue = [...resolved.candidates];
         const tried = [];
-        let idx = 0;
-        let attempt = 0;
         let lastErr = null;
 
-        while (idx < queue.length) {
-            const model = queue[idx];
-            showPopup(`⏳ Generuję streszczenie (${model}, ~${approxTokens} tokenów)...`, true);
+        for (let round = 0; round <= MAX_RETRIES && queue.length; round++) {
+            let maxRetrySecs = 0;
+            let allPerDay = true;
 
-            const res = await gmRequest({
-                method: 'POST',
-                url: `${GEMINI_API}/models/${encodeURIComponent(model)}:generateContent`,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-goog-api-key': apiKey
-                },
-                data: JSON.stringify({
-                    contents: [{ role: 'user', parts: [{ text: userPrompt }] }]
-                })
-            });
-            if (myRun !== runId) return;
-            log('Odpowiedź HTTP', model, res.status, (res.responseText || '').slice(0, 300));
+            for (let i = 0; i < queue.length; i++) {
+                const model = queue[i];
+                showPopup(`⏳ Generuję streszczenie (${model}, ~${approxTokens} tokenów)...` +
+                    (round ? `\n\nRunda ${round + 1}/${MAX_RETRIES + 1}` : ''), true);
 
-            if (res.status >= 200 && res.status < 300) {
-                try {
-                    showPopup(extractSummary(res), false);
-                } catch (e) {
-                    log('Błąd parsowania', e);
-                    showPopup('❌ Nie udało się sparsować odpowiedzi API.', false);
+                const res = await gmRequest({
+                    method: 'POST',
+                    url: `${GEMINI_API}/models/${encodeURIComponent(model)}:generateContent`,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-goog-api-key': apiKey
+                    },
+                    data: JSON.stringify({
+                        contents: [{ role: 'user', parts: [{ text: userPrompt }] }]
+                    })
+                });
+                if (myRun !== runId) return;
+                log('Odpowiedź HTTP', model, res.status, (res.responseText || '').slice(0, 300));
+
+                if (res.status >= 200 && res.status < 300) {
+                    try {
+                        showPopup(extractSummary(res), false);
+                    } catch (e) {
+                        log('Błąd parsowania', e);
+                        showPopup('❌ Nie udało się sparsować odpowiedzi API.', false);
+                    }
+                    return;
                 }
-                return;
-            }
 
-            const err = parseError(res);
-            lastErr = { model, status: res.status, err };
-            const accessErr = describeAccessError(res, err);
-            if (accessErr) {
-                showPopup(accessErr, false);
-                return;
-            }
+                const err = parseError(res);
+                lastErr = { model, status: res.status, err };
+                const accessErr = describeAccessError(res, err);
+                if (accessErr) {
+                    showPopup(accessErr, false);
+                    return;
+                }
 
-            if (res.status === 404 ||
-                (res.status === 400 && /not found|not supported|unsupported|deprecated|no longer available/i.test(err.message))) {
-                log(`Model ${model} niedostępny (${res.status}) — próbuję następnego`);
-                tried.push(`${model} (${res.status})`);
-                idx++;
-                attempt = 0;
-                continue;
-            }
-
-            if (res.status === 429 || res.status === 500 || res.status === 503) {
-                const overloaded = res.status !== 429;
-                const label = overloaded ? 'Gemini przeciążony' : 'Limit Gemini wyczerpany';
-                tried.push(`${model} (${res.status})`);
-                if (idx + 1 < queue.length) {
-                    const next = queue[idx + 1];
-                    const ok = await countdown(2, (left) =>
-                        `⏳ ${label} na ${model} („${err.message.slice(0, 160)}”).\n\nPrzełączam na ${next} za ${left}s...`, myRun);
-                    if (!ok) return;
-                    idx++;
-                    attempt = 0;
+                if (res.status === 404 ||
+                    (res.status === 400 && /not found|not supported|unsupported|deprecated|no longer available/i.test(err.message))) {
+                    log(`Model ${model} niedostępny (${res.status}) — usuwam z kolejki`);
+                    tried.push(`${model} (${res.status})`);
+                    queue.splice(i, 1);
+                    i--;
                     continue;
                 }
-                if (attempt >= MAX_RETRIES || /per.?day|PerDay/i.test(err.raw)) break;
-                const wait = err.retrySecs || (overloaded ? 15 * (attempt + 1) : 60);
-                const ok = await countdown(wait, (left) =>
-                    `⏳ ${label} („${err.message.slice(0, 160)}”).\n\nPonawiam za ${left}s... (próba ${attempt + 2}/${MAX_RETRIES + 1}, model ${model})`, myRun);
-                if (!ok) return;
-                attempt++;
-                continue;
+
+                if (res.status === 429 || res.status === 500 || res.status === 503) {
+                    const label = res.status === 429 ? 'Limit Gemini wyczerpany' : 'Gemini przeciążony';
+                    tried.push(`${model} (${res.status})`);
+                    maxRetrySecs = Math.max(maxRetrySecs, err.retrySecs);
+                    if (!/per.?day|PerDay/i.test(err.raw)) allPerDay = false;
+                    const next = queue[i + 1];
+                    if (next) {
+                        const ok = await countdown(2, (left) =>
+                            `⏳ ${label} na ${model} („${err.message.slice(0, 160)}”).\n\nPrzełączam na ${next} za ${left}s...`, myRun);
+                        if (!ok) return;
+                    }
+                    continue;
+                }
+
+                showPopup(`❌ Błąd API (HTTP ${res.status}${err.status ? ' ' + err.status : ''}, model ${model}):\n${err.message}`, false);
+                return;
             }
 
-            showPopup(`❌ Błąd API (HTTP ${res.status}${err.status ? ' ' + err.status : ''}, model ${model}):\n${err.message}`, false);
-            return;
+            if (!queue.length || allPerDay || round >= MAX_RETRIES) break;
+            const wait = Math.min(maxRetrySecs || 15 * (round + 1), 90);
+            const ok = await countdown(wait, (left) =>
+                `⏳ Wszystkie modele są teraz przeciążone lub bez limitu (${queue.join(', ')}).\n\n` +
+                `Ponawiam za ${left}s... (runda ${round + 2}/${MAX_RETRIES + 1})`, myRun);
+            if (!ok) return;
         }
 
         const lastStatus = lastErr?.status;
-        if (lastStatus === 429 || lastStatus === 500 || lastStatus === 503) {
-            showPopup(`❌ ${lastStatus === 429 ? 'Wyczerpany limit Gemini' : 'Gemini jest przeciążony'} na wszystkich próbowanych modelach.\n\n` +
+        if (queue.length && (lastStatus === 429 || lastStatus === 500 || lastStatus === 503)) {
+            showPopup(`❌ ${lastStatus === 429 ? 'Wyczerpany limit Gemini' : 'Gemini jest przeciążony'} na wszystkich dostępnych modelach.\n\n` +
                 `Odpowiedź API: \`${lastErr.err.message}\`\n\n` +
                 `- Próbowane: ${[...new Set(tried)].join(', ')}\n` +
                 `- Transkrypt to ok. **${approxTokens} tokenów**\n` +
+                '- Przeciążenie (503) zwykle mija po kilku minutach — spróbuj ponownie później\n' +
                 '- Jeśli komunikat mówi o limicie **dziennym** (per day), trzeba poczekać do resetu (północ czasu pacyficznego, ok. 9:00 w Polsce)\n' +
                 '- Swoje limity sprawdzisz na aistudio.google.com → Usage / Rate limits', false);
             return;
         }
         showPopup('❌ Żaden z modeli Gemini nie jest dostępny dla tego klucza.\n\n' +
-            `- Próbowane: ${tried.join(', ') || queue.join(', ')}\n` +
+            `- Próbowane: ${[...new Set(tried)].join(', ') || resolved.candidates.join(', ')}\n` +
             (lastErr ? `- Ostatni błąd: \`${lastErr.err.message}\`\n` : '') +
             '- Ustaw model ręcznie w menu Tampermonkey („Zmień model Gemini”) — skrypt pokaże tam listę dostępnych modeli', false);
     }
