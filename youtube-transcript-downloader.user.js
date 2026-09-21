@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Transcript Downloader
 // @namespace    http://tampermonkey.net/
-// @version      3.4
+// @version      3.5
 // @description  Download or copy YouTube transcripts, or summarize them with Google Gemini
 // @match        https://www.youtube.com/*
 // @grant        GM_xmlhttpRequest
@@ -73,24 +73,38 @@
         }
     ];
 
-    function detectVariant() {
-        return TRANSCRIPT_VARIANTS.find(v => document.querySelector(v.segmentSelector)) || null;
-    }
-
     function collectSegments() {
-        const variant = detectVariant();
-        if (!variant) return [];
+        const groups = new Map();
+        for (const variant of TRANSCRIPT_VARIANTS) {
+            document.querySelectorAll(variant.segmentSelector).forEach(seg => {
+                if (seg.parentElement?.closest(variant.segmentSelector)) return;
+                const panel = seg.closest('ytd-engagement-panel-section-list-renderer') || seg.parentElement;
+                if (!groups.has(panel)) groups.set(panel, { panel, variant, segs: [] });
+                groups.get(panel).segs.push(seg);
+            });
+        }
+        if (!groups.size) return [];
+
+        const isExpanded = (p) => /EXPANDED/.test(p?.getAttribute?.('visibility') || '') ? 1 : 0;
+        const isVisible = (p) => (p?.offsetParent || p?.getClientRects?.().length) ? 1 : 0;
+        const best = [...groups.values()].sort((a, b) =>
+            (isExpanded(b.panel) - isExpanded(a.panel)) ||
+            (isVisible(b.panel) - isVisible(a.panel)) ||
+            (b.segs.length - a.segs.length))[0];
+
         const parsed = [];
-        document.querySelectorAll(variant.segmentSelector).forEach(seg => {
-            const tsEl = seg.querySelector(variant.timestampSelector);
-            const textEl = seg.querySelector(variant.textSelector);
-            if (!tsEl || !textEl) return;
+        const seen = new Set();
+        for (const seg of best.segs) {
+            const tsEl = seg.querySelector(best.variant.timestampSelector);
+            const textEl = seg.querySelector(best.variant.textSelector);
+            if (!tsEl || !textEl) continue;
             const timestamp = tsEl.textContent.trim();
             const text = textEl.textContent.replace(/\s+/g, ' ').trim();
-            if (text) {
-                parsed.push({ timestamp, seconds: parseTimestampToSeconds(timestamp), text });
-            }
-        });
+            const key = `${timestamp}|${text}`;
+            if (!text || seen.has(key)) continue;
+            seen.add(key);
+            parsed.push({ timestamp, seconds: parseTimestampToSeconds(timestamp), text });
+        }
         return parsed;
     }
 
