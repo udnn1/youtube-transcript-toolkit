@@ -1,4 +1,28 @@
-# YouTube Transcript Toolkit
+<div align="center">
+
+# 🎬 YouTube Transcript Toolkit ✨
+
+### ⚡ Pobieraj, kopiuj lub streszczaj transkrypcje YouTube jednym kliknięciem ⚡
+
+<p>
+  <img src="https://img.shields.io/badge/Tampermonkey-00485B?style=for-the-badge&logo=tampermonkey&logoColor=white" alt="Tampermonkey" />
+  <img src="https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black" alt="JavaScript" />
+  <img src="https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube" />
+  <img src="https://img.shields.io/badge/Google_Gemini-8E75B2?style=for-the-badge&logo=googlegemini&logoColor=white" alt="Google Gemini" />
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="MIT License" />
+</p>
+
+<p>
+  <b>🚀 Zero zależności</b> &nbsp;•&nbsp;
+  <b>📦 Jeden plik</b> &nbsp;•&nbsp;
+  <b>⏱️ Pełne timestampy</b> &nbsp;•&nbsp;
+  <b>✨ Streszczenia AI</b> &nbsp;•&nbsp;
+  <b>🔄 Obsługa SPA</b>
+</p>
+
+</div>
+
+---
 
 Skrypt Tampermonkey, który dodaje trzy przyciski w rzędzie akcji pod filmem YouTube:
 
