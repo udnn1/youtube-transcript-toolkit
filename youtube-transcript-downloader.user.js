@@ -1,9 +1,11 @@
 // ==UserScript==
 // @name         YouTube Transcript Downloader
 // @namespace    http://tampermonkey.net/
-// @version      3.7
+// @version      3.8
 // @description  Download or copy YouTube transcripts, or summarize them with Google Gemini
 // @match        https://www.youtube.com/*
+// @updateURL    https://raw.githubusercontent.com/udnn1/youtube-transcript-toolkit/main/youtube-transcript-downloader.user.js
+// @downloadURL  https://raw.githubusercontent.com/udnn1/youtube-transcript-toolkit/main/youtube-transcript-downloader.user.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
