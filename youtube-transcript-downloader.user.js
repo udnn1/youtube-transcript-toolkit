@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Transcript Downloader
 // @namespace    http://tampermonkey.net/
-// @version      3.5
+// @version      3.6
 // @description  Download or copy YouTube transcripts, or summarize them with Google Gemini
 // @match        https://www.youtube.com/*
 // @grant        GM_xmlhttpRequest
@@ -700,53 +700,55 @@
         document.body.appendChild(overlay);
     }
 
-    function makeButton(id, label, bottom, bg, bgHover, onClick) {
+    function makeButton(id, label, bg, bgHover, onClick) {
         const btn = document.createElement('button');
         btn.id = id;
         btn.textContent = label;
         btn.dataset.label = label;
         btn.style.cssText = [
-            'position: fixed',
-            `bottom: ${bottom}px`,
-            'right: 24px',
-            'padding: 12px 18px',
+            'display: inline-flex',
+            'align-items: center',
+            'height: 36px',
+            'padding: 0 16px',
+            'margin-left: 8px',
             `background: ${bg}`,
             'color: #fff',
             'border: none',
-            'border-radius: 24px',
+            'border-radius: 18px',
             'font-size: 14px',
-            'font-weight: 600',
-            'font-family: Roboto, Arial, sans-serif',
+            'font-weight: 500',
+            'font-family: "Roboto","Arial",sans-serif',
             'cursor: pointer',
-            'letter-spacing: .01em',
-            'box-shadow: 0 4px 12px rgba(0,0,0,.35)',
-            'transition: background .15s, transform .1s',
-            'z-index: 2147483646',
+            'white-space: nowrap',
+            'transition: background .15s',
         ].join(';');
         btn.addEventListener('mouseenter', () => { btn.style.background = bgHover; });
         btn.addEventListener('mouseleave', () => { btn.style.background = bg; });
-        btn.addEventListener('mousedown', () => { btn.style.transform = 'scale(.96)'; });
-        btn.addEventListener('mouseup', () => { btn.style.transform = 'scale(1)'; });
         btn.addEventListener('click', onClick);
         return btn;
     }
 
+    function findActionsRow() {
+        return document.querySelector(
+            'ytd-watch-metadata #top-level-buttons-computed, ' +
+            'ytd-menu-renderer.ytd-watch-metadata #top-level-buttons-computed'
+        );
+    }
+
     function injectButtons() {
+        const row = findActionsRow();
+        if (!row) return false;
+
         if (!document.getElementById(DL_BUTTON_ID)) {
-            document.body.appendChild(
-                makeButton(DL_BUTTON_ID, '⬇ Pobierz JSON', 24, '#ff0000', '#c00', downloadTranscript)
-            );
+            row.appendChild(makeButton(DL_BUTTON_ID, '⬇ JSON', '#ff0000', '#c00', downloadTranscript));
         }
         if (!document.getElementById(COPY_BUTTON_ID)) {
-            document.body.appendChild(
-                makeButton(COPY_BUTTON_ID, '📋 Kopiuj transkrypt', 76, '#3f3f3f', '#565656', copyTranscript)
-            );
+            row.appendChild(makeButton(COPY_BUTTON_ID, '📋 Kopiuj', '#3f3f3f', '#565656', copyTranscript));
         }
         if (!document.getElementById(SUM_BUTTON_ID)) {
-            document.body.appendChild(
-                makeButton(SUM_BUTTON_ID, '✨ Streść (Gemini)', 128, '#1a73e8', '#1558b0', summarizeTranscript)
-            );
+            row.appendChild(makeButton(SUM_BUTTON_ID, '✨ Streść', '#1a73e8', '#1558b0', summarizeTranscript));
         }
+        return true;
     }
 
     function removeButtons() {
