@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Transcript Downloader
 // @namespace    http://tampermonkey.net/
-// @version      3.6
+// @version      3.7
 // @description  Download or copy YouTube transcripts, or summarize them with Google Gemini
 // @match        https://www.youtube.com/*
 // @grant        GM_xmlhttpRequest
@@ -700,7 +700,9 @@
         document.body.appendChild(overlay);
     }
 
-    function makeButton(id, label, bg, bgHover, onClick) {
+    function makeButton(id, label, onClick) {
+        const bg = 'var(--yt-spec-badge-chip-background, rgba(255,255,255,.1))';
+        const bgHover = 'var(--yt-spec-button-chip-background-hover, rgba(255,255,255,.2))';
         const btn = document.createElement('button');
         btn.id = id;
         btn.textContent = label;
@@ -712,7 +714,7 @@
             'padding: 0 16px',
             'margin-left: 8px',
             `background: ${bg}`,
-            'color: #fff',
+            'color: var(--yt-spec-text-primary, #f1f1f1)',
             'border: none',
             'border-radius: 18px',
             'font-size: 14px',
@@ -740,13 +742,13 @@
         if (!row) return false;
 
         if (!document.getElementById(DL_BUTTON_ID)) {
-            row.appendChild(makeButton(DL_BUTTON_ID, '⬇ JSON', '#ff0000', '#c00', downloadTranscript));
+            row.appendChild(makeButton(DL_BUTTON_ID, '⬇ JSON', downloadTranscript));
         }
         if (!document.getElementById(COPY_BUTTON_ID)) {
-            row.appendChild(makeButton(COPY_BUTTON_ID, '📋 Kopiuj', '#3f3f3f', '#565656', copyTranscript));
+            row.appendChild(makeButton(COPY_BUTTON_ID, '📋 Kopiuj', copyTranscript));
         }
         if (!document.getElementById(SUM_BUTTON_ID)) {
-            row.appendChild(makeButton(SUM_BUTTON_ID, '✨ Streść', '#1a73e8', '#1558b0', summarizeTranscript));
+            row.appendChild(makeButton(SUM_BUTTON_ID, '✨ Streść', summarizeTranscript));
         }
         return true;
     }
